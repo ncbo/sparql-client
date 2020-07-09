@@ -416,7 +416,7 @@ module SPARQL
         begin
           graph = graph.to_s
           graph = "sparql:graph:#{graph}" unless graph.start_with?("sparql:graph:")
-          if @redis_cache.exists(graph)
+          if @redis_cache.exists?(graph)
             begin
               @redis_cache.del(graph)
             rescue => exception
