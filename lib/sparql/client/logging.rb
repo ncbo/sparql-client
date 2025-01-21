@@ -8,6 +8,7 @@ class SPARQL::Client
     attr_accessor :enabled
 
     REDIS_EXPIRY = 86_400 # 24 hours
+    REDIS_USER_EXPIRY = 2_592_000 # 30 days
 
     def initialize(redis:, redis_key: 'query_logs', redis_expiry: REDIS_EXPIRY, logger: nil, max_logs: 1000)
       @redis = redis
@@ -17,41 +18,37 @@ class SPARQL::Client
       @enabled = !logger.nil?
       @max_logs = max_logs
       @count_key = "count-#{@redis_key}"
+      @user_count_key = "user-count-#{@redis_key}"
     end
 
     def log(query, id: SecureRandom.uuid, cached: nil, user: nil, &block)
       return block.call unless @enabled
 
+      cached_nil = cached.nil?
       time = Benchmark.realtime do
         result = block.call
-        cached = !result.nil? if cached.nil?
+        cached = !result.nil? if cached_nil
       end
-      info(query, id: id, cached: cached, user: user, execution_time: time)
+      info(query, id: id, cached: cached, user: user, execution_time: time) if !cached_nil || cached
     end
 
-    def info(query, id: SecureRandom.uuid, cached: 'null', user: 'null', execution_time: 0)
+    def info(query, id: SecureRandom.uuid, cached: 'null', user: nil, execution_time: 0)
       timestamp = Time.now.iso8601
+      user = Thread.current[:remote_user]&.id.to_s || user
       entry = {
         id: id,
         timestamp: timestamp,
         query: query.to_s,
         cached: cached,
-        user: Thread.current[:remote_user]&.value || user,
+        user: user,
         execution_time: execution_time.round(3).to_s
       }
 
       @logger&.info("SPARQL: #{query} (#{execution_time}s) | Cached: #{cached} | User: #{user}")
       return if @redis.nil?
 
-      key = "#{@redis_key}-#{id}-#{timestamp}"
-      entry = encode_data(entry)
-      return if entry.nil?
-
-      @redis.set(key, entry)
-      @redis.expire(key, @redis_expiry)
-      @redis.incr(@count_key)
-
-      enforce_log_limit(@redis.get(@count_key).to_i)
+      save_log(entry)
+      update_user_count(user)
     end
 
     def get_logs
@@ -83,12 +80,33 @@ class SPARQL::Client
       filtered_logs.sort_by { |log| Time.parse(log['timestamp']) }.reverse
     end
 
+    def users_query_count
+      keys = @redis.keys("#{@user_count_key}-*")
+      keys.map do |key|
+        user = key.split('-').last
+        count = @redis.get(key).to_i
+        { user: user, count: count }
+      end
+    end
+
     def logger=(logger)
       @logger = logger
       @enabled = !logger.nil?
     end
 
     private
+
+    def save_log(entry)
+      key = "#{@redis_key}-#{entry[:id]}-#{entry[:timestamp]}"
+      entry = encode_data(entry)
+      return if entry.nil?
+
+      @redis.set(key, entry)
+      @redis.expire(key, @redis_expiry)
+      @redis.incr(@count_key)
+
+      enforce_log_limit(@redis.get(@count_key).to_i)
+    end
 
     def extract_timestamp_from_key(key)
       timestamp = key.split('-').last
@@ -129,6 +147,15 @@ class SPARQL::Client
 
     def decode_data(data)
       Marshal.load(data)
+    end
+
+    def update_user_count(user)
+      return if user.nil?
+      user_key = "#{@user_count_key}-#{user}"
+      user_count = @redis.get(user_key)
+      user_count = user_count.nil? ? 1 : user_count.to_i + 1
+      @redis.set(user_key, user_count)
+      @redis.expire(user_key, REDIS_USER_EXPIRY)
     end
 
   end
