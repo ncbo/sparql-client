@@ -9,12 +9,14 @@ class SPARQL::Client
 
     REDIS_EXPIRY = 86_400 # 24 hours
 
-    def initialize(redis:, redis_key: 'query_logs', redis_expiry: REDIS_EXPIRY, logger: nil)
+    def initialize(redis:, redis_key: 'query_logs', redis_expiry: REDIS_EXPIRY, logger: nil, max_logs: 1000)
       @redis = redis
       @logger = logger
       @redis_key = redis_key
       @redis_expiry = redis_expiry
       @enabled = !logger.nil?
+      @max_logs = max_logs
+      @count_key = "count-#{@redis_key}"
     end
 
     def log(query, id: SecureRandom.uuid, cached: nil, user: nil, &block)
@@ -34,7 +36,7 @@ class SPARQL::Client
         timestamp: timestamp,
         query: query.to_s,
         cached: cached,
-        user: user,
+        user: Thread.current[:remote_user]&.value || user,
         execution_time: execution_time.round(3).to_s
       }
 
@@ -47,6 +49,9 @@ class SPARQL::Client
 
       @redis.set(key, entry)
       @redis.expire(key, @redis_expiry)
+      @redis.incr(@count_key)
+
+      enforce_log_limit(@redis.get(@count_key).to_i)
     end
 
     def get_logs
@@ -62,8 +67,8 @@ class SPARQL::Client
       loop do
         cursor, keys = @redis.scan(cursor, match: "#{@redis_key}-*", count: 100)
         keys.each do |key|
-          timestamp = key.split('-').last
-          next unless timestamp && timestamp.include?('T')
+          timestamp = extract_timestamp_from_key(key)
+          next if timestamp.nil?
 
           log_time = Time.parse(timestamp)
           if (current_time - log_time) <= seconds
@@ -84,6 +89,33 @@ class SPARQL::Client
     end
 
     private
+
+    def extract_timestamp_from_key(key)
+      timestamp = key.split('-').last
+      return nil unless timestamp.include?('T')
+      timestamp
+    end
+
+    def enforce_log_limit(log_count)
+      return unless log_count >= @max_logs * 2
+
+      keys = @redis.keys("#{@redis_key}-*")
+      keys_with_timestamps = keys.map do |key|
+        timestamp = extract_timestamp_from_key(key)
+        [key, Time.parse(timestamp)] if timestamp
+      end.compact
+
+      keys_with_timestamps.sort_by! { |_, time| time }
+
+      old_logs = keys_with_timestamps.first(keys_with_timestamps.size - @max_logs).map(&:first)
+
+      @redis.del(*old_logs) unless old_logs.empty?
+
+      if old_logs.any?
+        old_count = @redis.get(@count_key).to_i
+        @redis.set(@count_key, old_count - old_logs.size)
+      end
+    end
 
     def encode_data(entry)
       data = Marshal.dump(entry.to_json)
