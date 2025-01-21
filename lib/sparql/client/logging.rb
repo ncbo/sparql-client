@@ -17,7 +17,7 @@ class SPARQL::Client
       @enabled = !logger.nil?
     end
 
-    def log(query, id: SecureRandom.uuid, cached: nil, user: nil ,&block)
+    def log(query, id: SecureRandom.uuid, cached: nil, user: nil, &block)
       return block.call unless @enabled
 
       time = Benchmark.realtime do
@@ -26,7 +26,6 @@ class SPARQL::Client
       end
       info(query, id: id, cached: cached, user: user, execution_time: time)
     end
-
 
     def info(query, id: SecureRandom.uuid, cached: 'null', user: 'null', execution_time: 0)
       timestamp = Time.now.iso8601
@@ -38,7 +37,6 @@ class SPARQL::Client
         user: user,
         execution_time: execution_time.round(3).to_s
       }
-
 
       @logger&.info("SPARQL: #{query} (#{execution_time}s) | Cached: #{cached} | User: #{user}")
       return if @redis.nil?
@@ -56,12 +54,36 @@ class SPARQL::Client
       keys.map { |key| Marshal.load(@redis.get(key)) }
     end
 
+    def queries_last_n_seconds(seconds)
+      current_time = Time.now
+      filtered_logs = []
+      cursor = '0'
+      loop do
+        cursor, keys = @redis.scan(cursor, match: "#{@redis_key}-*", count: 100)
+        keys.each do |key|
+          timestamp = key.split('-').last
+          next unless timestamp && timestamp.include?('T')
+
+          log_time = Time.parse(timestamp)
+          if (current_time - log_time) <= seconds
+            log = JSON.parse(Marshal.load(@redis.get(key)))
+            filtered_logs << log
+          end
+        end
+
+        break if cursor == '0' # Exit loop when scan cursor is back to 0
+      end
+
+      filtered_logs.sort_by { |log| Time.parse(log['timestamp']) }
+    end
+
     def logger=(logger)
       @logger = logger
       @enabled = !logger.nil?
     end
 
     private
+
     def encode_data(entry)
       data = Marshal.dump(entry.to_json)
       if data.length > 50e6 # 50MB of marshal object
