@@ -51,7 +51,8 @@ class SPARQL::Client
 
     def get_logs
       keys = @redis.keys("#{@redis_key}-*")
-      keys.map { |key| Marshal.load(@redis.get(key)) }
+      logs = keys.map { |key| JSON.parse(Marshal.load(@redis.get(key))) }
+      logs.sort_by { |log| Time.parse(log['timestamp']) }.reverse
     end
 
     def queries_last_n_seconds(seconds)
@@ -74,7 +75,7 @@ class SPARQL::Client
         break if cursor == '0' # Exit loop when scan cursor is back to 0
       end
 
-      filtered_logs.sort_by { |log| Time.parse(log['timestamp']) }
+      filtered_logs.sort_by { |log| Time.parse(log['timestamp']) }.reverse
     end
 
     def logger=(logger)
