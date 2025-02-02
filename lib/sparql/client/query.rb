@@ -764,6 +764,33 @@ class SPARQL::Client
       raise NotImplementedError
     end
 
+
+    def add_union_with_bind(patterns)
+      include_union = nil
+      buffer = []
+      patterns.each do |pattern, options|
+        buffer << include_union if include_union
+        buffer << '{'
+        buffer += serialize_patterns(pattern)
+        if options[:filters]
+          buffer += options[:filters].map do |filter|
+            str = filter[:values].map do |val|
+              "?#{filter[:predicate]} = <#{val}>"
+            end
+            "FILTER(#{str.join(' || ')}) "
+          end
+        end
+
+        if options[:binds]
+          buffer += options[:binds].map { |bind| "BIND( \"#{bind[:value]}\" as ?#{bind[:as]})" }
+        end
+
+        buffer << '}'
+        include_union = "UNION "
+      end
+      buffer
+    end
+
     ##
     # Returns the string representation of this query.
     #
@@ -815,31 +842,6 @@ class SPARQL::Client
       end
 
 
-      def add_union_with_bind(patterns)
-        include_union = nil
-        buffer = []
-        patterns.each do |pattern, options|
-          buffer << include_union if include_union
-          buffer << '{'
-          buffer += serialize_patterns(pattern)
-          if options[:filters]
-            buffer += options[:filters].map do |filter|
-              str = filter[:values].map do |val|
-                "?#{filter[:predicate]} = <#{val}>"
-              end
-              "FILTER(#{str.join(' || ')}) "
-            end
-          end
-
-          if options[:binds]
-            buffer += options[:binds].map { |bind| "BIND( \"#{bind[:value]}\" as ?#{bind[:as]})" }
-          end
-
-          buffer << '}'
-          include_union = "UNION "
-        end
-        buffer
-      end
 
       if options[:unions_with_bind]
         buffer.pop # remove } of where
