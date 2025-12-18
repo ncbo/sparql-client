@@ -109,9 +109,11 @@ class SPARQL::Client
     end
 
     def extract_timestamp_from_key(key)
-      timestamp = key.split('-').last
-      return nil unless timestamp.include?('T')
-      timestamp
+      # Extract the ISO8601 timestamp regardless of dashes in the UUID portion
+      match = key.match(/\d{4}-\d{2}-\d{2}T[0-9:\.\+\-]+/)
+      return nil unless match
+
+      match[0]
     end
 
     def enforce_log_limit(log_count)
