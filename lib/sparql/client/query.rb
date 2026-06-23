@@ -843,12 +843,6 @@ class SPARQL::Client
 
 
 
-      if options[:unions_with_bind]
-        buffer.pop # remove } of where
-        buffer << add_union_with_bind(options[:unions_with_bind])
-        buffer << '}'
-      end
-
       if options[:optional_unions_with_bind] && !options[:optional_unions_with_bind].empty?
         buffer.pop # remove } of where
         buffer << 'OPTIONAL {'
